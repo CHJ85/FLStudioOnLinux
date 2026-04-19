@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FLinux — FL Studio installer for Linux
+# FL Studio installer for Linux
 # Prefers WineHQ Stable when available, otherwise falls back to distro Wine
 
 set -euo pipefail
