@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FL Studio installer for Linux
+# FLinux — FL Studio installer for Linux
 # Prefers WineHQ Stable when available, otherwise falls back to distro Wine
 
 set -euo pipefail
@@ -50,7 +50,7 @@ detect_pm() {
 # INSTALL DEPENDENCIES
 ########################################
 install_packages() {
-    msg "Installing Wine and dependencies using $PM..."
+    msg "Installing dependencies for FL Studio using $PM..."
 
     case "$PM" in
         apt)
