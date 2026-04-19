@@ -1,5 +1,5 @@
-# FLStudioOnLinux
-An FL Studio installer for Linux that'll work on most distros without any extra hassle or tech knowledge.<br>
+# FL Studio on Linux
+This is an "easy to use" FL Studio installer for Linux. This program works on most Linux distros without any additional hassle or tech knowledge.<br>
 # Installation
 1: Have your FL Studio installation (.exe) file ready.<br>
 2: Run this command in the terminal: 
