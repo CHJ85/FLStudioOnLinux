@@ -1,0 +1,334 @@
+#!/usr/bin/env bash
+# FL Studio installer for Linux
+# Prefers WineHQ Stable when available, otherwise falls back to distro Wine
+
+set -euo pipefail
+IFS=$'\n\t'
+
+########################################
+# CONFIG
+########################################
+PREFIX="$HOME/.flstudio"
+APPDIR="$HOME/.local/share/applications"
+DESKTOP_FILE="$APPDIR/flstudio.desktop"
+DPI_SCALE=120
+
+########################################
+# HELPERS
+########################################
+msg() {
+    echo
+    echo "==> $1"
+}
+
+err() {
+    echo
+    echo "ERROR: $1" >&2
+    exit 1
+}
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || err "Missing command: $1"
+}
+
+########################################
+# DETECT PACKAGE MANAGER
+########################################
+detect_pm() {
+    if command -v apt >/dev/null 2>&1; then
+        PM="apt"
+    elif command -v dnf >/dev/null 2>&1; then
+        PM="dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        PM="pacman"
+    else
+        err "Unsupported Linux distribution."
+    fi
+}
+
+########################################
+# INSTALL DEPENDENCIES
+########################################
+install_packages() {
+    msg "Installing dependencies for FL Studio using $PM..."
+
+    case "$PM" in
+        apt)
+            sudo dpkg --add-architecture i386
+            sudo apt update
+
+            # 1. Check if it's already installed locally
+            # 2. Check if it's available in the repositories
+            # 3. Fallback to standard wine package
+            if dpkg-query -W -f='${Status}' winehq-stable 2>/dev/null | grep -q "ok installed"; then
+                msg "winehq-stable is already installed. Ensuring dependencies..."
+                sudo apt install -y \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            elif apt-cache show winehq-stable >/dev/null 2>&1; then
+                msg "WineHQ repository detected. Installing winehq-stable..."
+                sudo apt install -y \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            else
+                msg "WineHQ repo not found. Using distro Wine packages..."
+                sudo apt install -y \
+                    wine \
+                    wine64 \
+                    wine32:i386 \
+                    winetricks \
+                    cabextract \
+                    zenity
+            fi
+            ;;
+
+        dnf)
+            if rpm -q winehq-stable >/dev/null 2>&1; then
+                msg "winehq-stable is already installed. Ensuring dependencies..."
+                sudo dnf install -y \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            elif dnf info winehq-stable >/dev/null 2>&1; then
+                msg "WineHQ repository detected. Installing winehq-stable..."
+                sudo dnf install -y \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            else
+                msg "WineHQ repo not found. Using distro Wine packages..."
+                sudo dnf install -y \
+                    wine \
+                    winetricks \
+                    cabextract \
+                    zenity
+            fi
+            ;;
+
+        pacman)
+            if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+                err "Arch multilib repo is not enabled. Enable [multilib] first."
+            fi
+
+            if pacman -Qq winehq-stable >/dev/null 2>&1; then
+                msg "winehq-stable is already installed. Ensuring dependencies..."
+                sudo pacman -Syu --noconfirm \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            elif pacman -Si winehq-stable >/dev/null 2>&1; then
+                msg "winehq-stable found in repositories. Installing..."
+                sudo pacman -Syu --noconfirm \
+                    winehq-stable \
+                    winetricks \
+                    cabextract \
+                    zenity
+            else
+                msg "Installing Arch distro Wine packages..."
+                sudo pacman -Syu --noconfirm \
+                    wine \
+                    winetricks \
+                    cabextract \
+                    zenity
+            fi
+            ;;
+    esac
+}
+
+########################################
+# SETUP WINE PREFIX
+########################################
+setup_prefix() {
+    export WINEPREFIX="$PREFIX"
+    export WINEARCH="win64"
+
+    if [ ! -f "$WINEPREFIX/system.reg" ]; then
+        msg "Creating fresh Wine prefix..."
+        wineboot -u
+        sleep 5
+    else
+        msg "Using existing Wine prefix..."
+    fi
+}
+
+########################################
+# CONFIGURE WINE
+########################################
+configure_wine() {
+    export WINEPREFIX="$PREFIX"
+
+    msg "Installing Windows components..."
+    winetricks -q corefonts vcrun2019 dxvk gdiplus
+
+    msg "Setting DPI scaling..."
+    wine reg add \
+        "HKCU\Control Panel\Desktop" \
+        /v LogPixels \
+        /t REG_DWORD \
+        /d "$DPI_SCALE" \
+        /f
+
+    msg "Setting audio backend..."
+    winetricks -q sound=alsa || true
+}
+
+########################################
+# PICK INSTALLER
+########################################
+pick_installer() {
+    msg "Choose your FL Studio installer (.exe)"
+
+    if command -v zenity >/dev/null 2>&1; then
+        FLPATH="$(zenity --file-selection --title="Select FL Studio Installer")"
+    else
+        read -e -p "Path to installer: " FLPATH
+    fi
+
+    FLPATH="${FLPATH//\'/}"
+
+    [ -f "$FLPATH" ] || err "Installer not found: $FLPATH"
+}
+
+########################################
+# RUN INSTALLER
+########################################
+run_installer() {
+    export WINEPREFIX="$PREFIX"
+
+    msg "Launching FL Studio installer..."
+    wine "$FLPATH"
+}
+
+########################################
+# FIND FL EXECUTABLE
+########################################
+find_executable() {
+    msg "Locating FL Studio executable..."
+
+    SEARCH_ROOT="$PREFIX/drive_c"
+
+    EXE="$(
+        find "$SEARCH_ROOT" -type f \( \
+            -iname "FL64.exe" -o \
+            -iname "FL*.exe" -o \
+            -iname "*Studio*.exe" \
+        \) 2>/dev/null \
+        | grep -Ei 'Image-Line|FL Studio|Program Files' \
+        | head -n 1
+    )"
+
+    if [ -z "$EXE" ]; then
+        EXE="$(
+            find "$SEARCH_ROOT" -type f -iname "*.exe" 2>/dev/null \
+            | sort \
+            | tail -n 1
+        )"
+    fi
+
+    [ -n "$EXE" ] || err "Could not locate FL Studio executable."
+}
+
+########################################
+# FIND ICON
+########################################
+find_icon() {
+    msg "Locating FL Studio icon..."
+
+    ICON_DIR="$HOME/.local/share/icons"
+    mkdir -p "$ICON_DIR"
+    TARGET_ICON="$ICON_DIR/flstudio-wine.ico"
+
+    # Search for an .ico file near the executable first
+    FOUND_ICON="$(find "$(dirname "$EXE")" -maxdepth 3 -type f -iname "*fl*.ico" 2>/dev/null | head -n 1)"
+
+    if [ -z "$FOUND_ICON" ]; then
+        # Broader search across the Wine drive C:
+        FOUND_ICON="$(find "$SEARCH_ROOT" -type f -iname "FL64.ico" -o -iname "fl*.ico" 2>/dev/null | head -n 1)"
+    fi
+
+    if [ -n "$FOUND_ICON" ]; then
+        cp "$FOUND_ICON" "$TARGET_ICON"
+        msg "Icon found and configured."
+    else
+        TARGET_ICON=""
+        msg "No suitable icon found. Proceeding without icon."
+    fi
+}
+
+########################################
+# CREATE LAUNCHER
+########################################
+create_launcher() {
+    mkdir -p "$APPDIR"
+
+    cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Name=FL Studio
+Comment=Complete software music production environment and Digital Audio Workstation (DAW)
+Exec=env WINEPREFIX=$PREFIX wine "$EXE"
+Type=Application
+StartupNotify=true
+Categories=AudioVideo;Audio;Music;
+Terminal=false
+EOF
+
+    # Conditionally add the Icon path if we successfully found it
+    if [ -n "${TARGET_ICON:-}" ]; then
+        echo "Icon=$TARGET_ICON" >> "$DESKTOP_FILE"
+    fi
+
+    chmod +x "$DESKTOP_FILE"
+}
+
+########################################
+# CLEANUP WINE SHORTCUTS
+########################################
+cleanup_wine_shortcuts() {
+    msg "Cleaning up broken auto-generated Wine shortcuts..."
+
+    # Wine often creates its own shortcuts in this specific directory
+    WINE_MENU_DIR="$HOME/.local/share/applications/wine/Programs/Image-Line"
+
+    if [ -d "$WINE_MENU_DIR" ]; then
+        rm -rf "$WINE_MENU_DIR"
+    fi
+
+    # Find and delete any auto-generated FL Studio desktop files, while making sure we DO NOT delete the one we just created
+    find "$HOME/.local/share/applications" -type f -iname "*fl*studio*.desktop" ! -path "$DESKTOP_FILE" -exec rm -f {} + 2>/dev/null || true
+}
+
+########################################
+# MAIN
+########################################
+main() {
+    need_cmd sudo
+    need_cmd grep
+    need_cmd find
+
+    detect_pm
+    install_packages
+    setup_prefix
+    configure_wine
+    pick_installer
+    run_installer
+    find_executable
+    find_icon
+    create_launcher
+    cleanup_wine_shortcuts
+
+    msg "Installation complete."
+    echo "Launcher created:"
+    echo "$DESKTOP_FILE"
+    echo
+    echo "Manual launch command:"
+    echo "WINEPREFIX=\"$PREFIX\" wine \"$EXE\""
+}
+
+main "$@"
